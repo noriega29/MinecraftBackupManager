@@ -1,3 +1,4 @@
 <Solution>
+  <Project Path="MinecraftBackupManager.Tests/MinecraftBackupManager.Tests.csproj" />
   <Project Path="MinecraftBackupManager/MinecraftBackupManager.csproj" />
 </Solution>
