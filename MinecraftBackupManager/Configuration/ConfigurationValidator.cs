@@ -13,6 +13,7 @@ namespace MinecraftBackupManager.Configuration
 
             ValidateMinecraftServer(config, errors);
             ValidateRestic(config, errors);
+            ValidateRetention(config, errors);
 
             return new ConfigurationValidationResult(errors);
         }
@@ -95,6 +96,29 @@ namespace MinecraftBackupManager.Configuration
             else if (!Path.IsPathFullyQualified(restic.RepositoryPath))
             {
                 errors.Add("La ruta del repositorio Restic debe ser una ruta completa.");
+            }
+        }
+
+        private static void ValidateRetention(ApplicationConfig config, List<string> errors)
+        {
+            RetentionConfig? retention = config.Retention;
+
+            if (retention is null)
+            {
+                errors.Add("No se ha definido la configuración de retención.");
+                return;
+            }
+
+            ValidateCount(retention.HourlyCount, RetentionConfig.MaximumHourlyCount, "por hora (hourly)", errors);
+            ValidateCount(retention.DailyCount, RetentionConfig.MaximumDailyCount, "diarias (daily)", errors);
+            ValidateCount(retention.WeeklyCount, RetentionConfig.MaximumWeeklyCount, "semanales (weekly)", errors);
+        }
+
+        private static void ValidateCount(int value, int maximum, string description, List<string> errors)
+        {
+            if (value < RetentionConfig.MinimumCount || value > maximum)
+            {
+                errors.Add($"El número de copias {description} a conservar debe estar entre {RetentionConfig.MinimumCount} y {maximum}.");
             }
         }
 
