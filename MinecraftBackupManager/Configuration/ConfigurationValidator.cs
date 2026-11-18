@@ -13,6 +13,7 @@ namespace MinecraftBackupManager.Configuration
 
             ValidateMinecraftServer(config, errors);
             ValidateRestic(config, errors);
+            ValidateRepositoryLocation(config, errors);
             ValidateRetention(config, errors);
 
             return new ConfigurationValidationResult(errors);
@@ -99,6 +100,30 @@ namespace MinecraftBackupManager.Configuration
             }
         }
 
+        private static void ValidateRepositoryLocation(ApplicationConfig config, List<string> errors)
+        {
+            string? serverDirectory = config.MinecraftServer?.ServerDirectory;
+            string? repositoryPath = config.Restic?.RepositoryPath;
+
+            // Si alguna ruta falta o no es completa, ya se informó en su propia validación.
+            if (!IsFullPath(serverDirectory) || !IsFullPath(repositoryPath))
+            {
+                return;
+            }
+
+            string server = NormalizeDirectory(serverDirectory!);
+            string repository = NormalizeDirectory(repositoryPath!);
+
+            if (repository.StartsWith(server, StringComparison.OrdinalIgnoreCase))
+            {
+                errors.Add("El repositorio Restic no puede estar dentro de la carpeta del servidor Minecraft.");
+            }
+            else if (server.StartsWith(repository, StringComparison.OrdinalIgnoreCase))
+            {
+                errors.Add("La carpeta del servidor Minecraft no puede estar dentro del repositorio Restic.");
+            }
+        }
+
         private static void ValidateRetention(ApplicationConfig config, List<string> errors)
         {
             RetentionConfig? retention = config.Retention;
@@ -130,6 +155,17 @@ namespace MinecraftBackupManager.Configuration
             }
 
             return Uri.CheckHostName(host) == UriHostNameType.Dns;
+        }
+
+        private static bool IsFullPath(string? path) => !string.IsNullOrWhiteSpace(path) && Path.IsPathFullyQualified(path);
+
+        private static string NormalizeDirectory(string path)
+        {
+            string fullPath = Path.GetFullPath(path);
+
+            return Path.EndsInDirectorySeparator(fullPath)
+                ? fullPath
+                : fullPath + Path.DirectorySeparatorChar;
         }
     }
 }
