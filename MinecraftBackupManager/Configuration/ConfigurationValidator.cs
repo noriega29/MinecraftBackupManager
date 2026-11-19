@@ -13,6 +13,8 @@ namespace MinecraftBackupManager.Configuration
 
             ValidateMinecraftServer(config, errors);
             ValidateRestic(config, errors);
+            ValidateRepositoryLocation(config, errors);
+            ValidateRetention(config, errors);
 
             return new ConfigurationValidationResult(errors);
         }
@@ -98,6 +100,53 @@ namespace MinecraftBackupManager.Configuration
             }
         }
 
+        private static void ValidateRepositoryLocation(ApplicationConfig config, List<string> errors)
+        {
+            string? serverDirectory = config.MinecraftServer?.ServerDirectory;
+            string? repositoryPath = config.Restic?.RepositoryPath;
+
+            // Si alguna ruta falta o no es completa, ya se informó en su propia validación.
+            if (!IsFullPath(serverDirectory) || !IsFullPath(repositoryPath))
+            {
+                return;
+            }
+
+            string server = NormalizeDirectory(serverDirectory!);
+            string repository = NormalizeDirectory(repositoryPath!);
+
+            if (repository.StartsWith(server, StringComparison.OrdinalIgnoreCase))
+            {
+                errors.Add("El repositorio Restic no puede estar dentro de la carpeta del servidor Minecraft.");
+            }
+            else if (server.StartsWith(repository, StringComparison.OrdinalIgnoreCase))
+            {
+                errors.Add("La carpeta del servidor Minecraft no puede estar dentro del repositorio Restic.");
+            }
+        }
+
+        private static void ValidateRetention(ApplicationConfig config, List<string> errors)
+        {
+            RetentionConfig? retention = config.Retention;
+
+            if (retention is null)
+            {
+                errors.Add("No se ha definido la configuración de retención.");
+                return;
+            }
+
+            ValidateCount(retention.HourlyCount, RetentionConfig.MaximumHourlyCount, "por hora (hourly)", errors);
+            ValidateCount(retention.DailyCount, RetentionConfig.MaximumDailyCount, "diarias (daily)", errors);
+            ValidateCount(retention.WeeklyCount, RetentionConfig.MaximumWeeklyCount, "semanales (weekly)", errors);
+        }
+
+        private static void ValidateCount(int value, int maximum, string description, List<string> errors)
+        {
+            if (value < RetentionConfig.MinimumCount || value > maximum)
+            {
+                errors.Add($"El número de copias {description} a conservar debe estar entre {RetentionConfig.MinimumCount} y {maximum}.");
+            }
+        }
+
         private static bool IsValidHost(string host)
         {
             if (IPAddress.TryParse(host, out _))
@@ -106,6 +155,17 @@ namespace MinecraftBackupManager.Configuration
             }
 
             return Uri.CheckHostName(host) == UriHostNameType.Dns;
+        }
+
+        private static bool IsFullPath(string? path) => !string.IsNullOrWhiteSpace(path) && Path.IsPathFullyQualified(path);
+
+        private static string NormalizeDirectory(string path)
+        {
+            string fullPath = Path.GetFullPath(path);
+
+            return Path.EndsInDirectorySeparator(fullPath)
+                ? fullPath
+                : fullPath + Path.DirectorySeparatorChar;
         }
     }
 }

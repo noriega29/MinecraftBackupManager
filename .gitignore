@@ -399,3 +399,5 @@ FodyWeavers.xsd
 
 # JetBrains Rider
 *.sln.iml
+testEnvironments.json
+MinecraftBackupManager/Tools/restic.exe

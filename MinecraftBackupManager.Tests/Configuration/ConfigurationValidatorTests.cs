@@ -7,6 +7,31 @@ namespace MinecraftBackupManager.Tests.Configuration
     public sealed class ConfigurationValidatorTests
     {
         private readonly ConfigurationValidator _validator = new();
+        private string _root = string.Empty;
+
+        [TestInitialize]
+        public void Setup()
+        {
+            _root = Path.Combine(
+                Path.GetTempPath(),
+                "MinecraftBackupManagerTests",
+                Guid.NewGuid().ToString("N"));
+
+            // Server\World y Server2 existen para que ServerDirectory sea válido.
+            Directory.CreateDirectory(Path.Combine(_root, "Server", "World"));
+            Directory.CreateDirectory(Path.Combine(_root, "Server2"));
+        }
+
+        [TestCleanup]
+        public void Cleanup()
+        {
+            try
+            {
+                Directory.Delete(_root, recursive: true);
+            }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
 
         [TestMethod]
         public void Validate_ValidConfiguration_ReturnsValidResult()
@@ -24,7 +49,7 @@ namespace MinecraftBackupManager.Tests.Configuration
                 {
                     ExecutableSource = ResticExecutableSource.Bundled,
                     RepositoryPath = Path.Combine(
-                        Path.GetTempPath(),
+                        Path.GetPathRoot(Path.GetTempPath())!,
                         "MinecraftBackupManagerRepository")
                 }
             };
@@ -32,7 +57,7 @@ namespace MinecraftBackupManager.Tests.Configuration
             ConfigurationValidationResult result = _validator.Validate(config);
 
             Assert.IsTrue(result.IsValid);
-            Assert.AreEqual(0, result.Errors.Count);
+            Assert.IsEmpty(result.Errors);
         }
 
         [TestMethod]
@@ -58,7 +83,7 @@ namespace MinecraftBackupManager.Tests.Configuration
             ConfigurationValidationResult result = _validator.Validate(config);
 
             Assert.IsFalse(result.IsValid);
-            Assert.AreEqual(5, result.Errors.Count);
+            Assert.HasCount(5, result.Errors);
         }
 
         [TestMethod]
@@ -160,6 +185,49 @@ namespace MinecraftBackupManager.Tests.Configuration
                 error.Contains("repositorio Restic")));
         }
 
+        [TestMethod]
+        [DataRow(@"Server", @"Server")]
+        [DataRow(@"Server", @"Server\Repo")]
+        [DataRow(@"Server", @"Server\")]
+        [DataRow(@"Server", @"SERVER\Repo")]
+        public void Validate_RepositoryInsideServerDirectory_ReturnsError(string server, string repository)
+        {
+            ApplicationConfig config = CreateConfigurationInRoot(server, repository);
+
+            ConfigurationValidationResult result = _validator.Validate(config);
+
+            Assert.IsFalse(result.IsValid);
+            Assert.HasCount(1, result.Errors);
+            StringAssert.Contains(result.Errors[0], "dentro de la carpeta del servidor");
+        }
+
+        [TestMethod]
+        [DataRow(@"Server\World", @"Server")]
+        [DataRow(@"Server\World", @"Server\")]
+        [DataRow(@"Server\World", @"SERVER")]
+        public void Validate_ServerDirectoryInsideRepository_ReturnsError(string server, string repository)
+        {
+            ApplicationConfig config = CreateConfigurationInRoot(server, repository);
+
+            ConfigurationValidationResult result = _validator.Validate(config);
+
+            Assert.IsFalse(result.IsValid);
+            Assert.HasCount(1, result.Errors);
+            StringAssert.Contains(result.Errors[0], "dentro del repositorio");
+        }
+
+        [TestMethod]
+        [DataRow(@"Server", @"Server2")]
+        [DataRow(@"Server", @"Repository")]
+        public void Validate_SeparateRepositoryAndServer_ReturnsValidResult(string server, string repository)
+        {
+            ApplicationConfig config = CreateConfigurationInRoot(server, repository);
+
+            ConfigurationValidationResult result = _validator.Validate(config);
+
+            Assert.IsTrue(result.IsValid, string.Join(" | ", result.Errors));
+        }
+
         private static ApplicationConfig CreateValidConfiguration()
         {
             return new ApplicationConfig
@@ -175,8 +243,28 @@ namespace MinecraftBackupManager.Tests.Configuration
                 {
                     ExecutableSource = ResticExecutableSource.Bundled,
                     RepositoryPath = Path.Combine(
-                        Path.GetTempPath(),
+                        Path.GetPathRoot(Path.GetTempPath())!,
                         "MinecraftBackupManagerRepository")
+                }
+            };
+        }
+
+        // Construye una configuración válida con las rutas relativas a la carpeta temporal de la prueba.
+        private ApplicationConfig CreateConfigurationInRoot(string server, string repository)
+        {
+            return new ApplicationConfig
+            {
+                MinecraftServer = new MinecraftServerConfig
+                {
+                    ServerDirectory = Path.Combine(_root, server),
+                    RconHost = "localhost",
+                    RconPort = 25575
+                },
+
+                Restic = new ResticConfig
+                {
+                    ExecutableSource = ResticExecutableSource.Bundled,
+                    RepositoryPath = Path.Combine(_root, repository)
                 }
             };
         }
