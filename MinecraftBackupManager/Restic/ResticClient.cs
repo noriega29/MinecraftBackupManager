@@ -4,10 +4,11 @@ using MinecraftBackupManager.Logging;
 using MinecraftBackupManager.Logging.Models;
 using MinecraftBackupManager.Restic.Models;
 using MinecraftBackupManager.Security;
+using MinecraftBackupManager.Backup;
 
 namespace MinecraftBackupManager.Restic
 {
-    public sealed class ResticClient
+    public sealed class ResticClient : IBackupRepository
     {
         private const int RepositoryDoesNotExistExitCode = 10;
         private const int WrongPasswordExitCode = 12;

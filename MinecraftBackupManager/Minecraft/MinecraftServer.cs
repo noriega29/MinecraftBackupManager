@@ -2,6 +2,7 @@
 using MinecraftBackupManager.Logging;
 using MinecraftBackupManager.Logging.Models;
 using MinecraftBackupManager.Security;
+using MinecraftBackupManager.Backup;
 
 namespace MinecraftBackupManager.Minecraft
 {
@@ -9,7 +10,7 @@ namespace MinecraftBackupManager.Minecraft
     /// Representa el servidor Minecraft configurado y expone únicamente las
     /// operaciones RCON necesarias para realizar respaldos consistentes.
     /// </summary>
-    public sealed class MinecraftServer : IAsyncDisposable
+    public sealed class MinecraftServer : IBackupServer, IAsyncDisposable
     {
         private const string SaveOffCommand = "save-off";
         private const string SaveAllCommand = "save-all flush";
