@@ -95,9 +95,10 @@ namespace MinecraftBackupManager.Backup
                 autosaveRestored = await ResumeAutosaveSafelyAsync();
             }
 
-            // La retención (forget y prune) se añade en la Parte B.
+            // 3. Retención: solo se aplica a los respaldos automáticos.
+            IReadOnlyList<string> retentionWarnings = await ApplyRetentionAsync(kind, autosaveRestored, cancellationToken);
 
-            return BuildReport(kind, backup, autosaveRestored);
+            return BuildReport(kind, backup, autosaveRestored, retentionWarnings);
         }
 
         // Devuelve true si se confirmó la reactivación. Nunca lanza excepciones:
@@ -119,7 +120,96 @@ namespace MinecraftBackupManager.Backup
             }
         }
 
-        private BackupReport BuildReport(ResticBackupKind kind, ResticBackupResult backup, bool autosaveRestored)
+        // Aplica forget y, si corresponde, prune. Devuelve las advertencias que
+        // deben aparecer en el informe. Un fallo de la retención nunca convierte
+        // en fallido un respaldo que ya creó su snapshot.
+        private async Task<IReadOnlyList<string>> ApplyRetentionAsync(
+            ResticBackupKind kind,
+            bool autosaveRestored,
+            CancellationToken cancellationToken)
+        {
+            var warnings = new List<string>();
+
+            int? keepLast = GetKeepLast(kind);
+
+            // initial y manual nunca se borran automáticamente.
+            if (keepLast is null)
+            {
+                return warnings;
+            }
+
+            try
+            {
+                await _repository.ForgetAsync(kind, keepLast.Value, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                TryLog(log => log.Error(LogCategory.Backup, $"Falló la retención de las copias '{kind.ToTag()}': {exception.Message}"));
+
+                warnings.Add("no se pudieron eliminar las copias antiguas");
+
+                // Sin un forget exitoso no se intenta el prune.
+                return warnings;
+            }
+
+            // ShouldPrune se consulta al final, solo si todo lo demás permite el prune.
+            if (!autosaveRestored || !_pruneState.ShouldPrune())
+            {
+                return warnings;
+            }
+
+            bool pruneSucceeded;
+
+            try
+            {
+                await _repository.PruneAsync(cancellationToken);
+
+                pruneSucceeded = true;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // Una cancelación no es un fallo del prune: no se anota nada.
+                throw;
+            }
+            catch (Exception exception)
+            {
+                TryLog(log => log.Error(LogCategory.Backup, $"Falló la compactación del repositorio: {exception.Message}"));
+
+                pruneSucceeded = false;
+            }
+
+            // Se anota fuera del try: si anotar fallara, no debe confundirse con un fallo del prune.
+            if (pruneSucceeded)
+            {
+                _pruneState.RecordPruneSuccess();
+            }
+            else
+            {
+                _pruneState.RecordPruneFailure();
+
+                warnings.Add("no se pudo compactar el repositorio");
+            }
+
+            return warnings;
+        }
+
+        // Cuántas copias de ese tipo se conservan, o null si el tipo no se borra automáticamente.
+        private int? GetKeepLast(ResticBackupKind kind)
+        {
+            return kind switch
+            {
+                ResticBackupKind.Hourly => _retention.HourlyCount,
+                ResticBackupKind.Daily => _retention.DailyCount,
+                ResticBackupKind.Weekly => _retention.WeeklyCount,
+                _ => null
+            };
+        }
+
+        private BackupReport BuildReport(ResticBackupKind kind, ResticBackupResult backup, bool autosaveRestored, IReadOnlyList<string> retentionWarnings)
         {
             var warnings = new List<string>();
 
@@ -132,6 +222,8 @@ namespace MinecraftBackupManager.Backup
             {
                 warnings.Add("no se pudo reactivar el guardado automático; ejecuta 'save-on' manualmente en el servidor");
             }
+
+            warnings.AddRange(retentionWarnings);
 
             if (warnings.Count == 0)
             {

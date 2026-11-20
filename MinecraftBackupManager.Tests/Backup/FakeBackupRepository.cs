@@ -29,6 +29,22 @@ namespace MinecraftBackupManager.Tests.Backup
 
         public ResticBackupKind? LastBackupKind { get; private set; }
 
+        // Si se asigna, ForgetAsync falla con esta excepción.
+        public Exception? ForgetException { get; set; }
+
+        // Si se asigna, PruneAsync falla con esta excepción.
+        public Exception? PruneException { get; set; }
+
+        // Igual que BackupGate, pero para forget y prune.
+        public Task? ForgetGate { get; set; }
+
+        public Task? PruneGate { get; set; }
+
+        // Se completan en cuanto ForgetAsync o PruneAsync empiezan a ejecutarse.
+        public TaskCompletionSource ForgetStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource PruneStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         public Task<ResticRepositoryState> GetRepositoryStateAsync(CancellationToken cancellationToken = default)
         {
             _log.Add("repository-state");
@@ -60,18 +76,38 @@ namespace MinecraftBackupManager.Tests.Backup
             return Task.FromResult<IReadOnlyList<ResticSnapshot>>(Array.Empty<ResticSnapshot>());
         }
 
-        public Task ForgetAsync(ResticBackupKind kind, int keepLast, CancellationToken cancellationToken = default)
+        public async Task ForgetAsync(ResticBackupKind kind, int keepLast, CancellationToken cancellationToken = default)
         {
             _log.Add($"forget:{kind}:{keepLast}");
 
-            return Task.CompletedTask;
+            ForgetStarted.TrySetResult();
+
+            if (ForgetGate is not null)
+            {
+                await ForgetGate.WaitAsync(cancellationToken);
+            }
+
+            if (ForgetException is not null)
+            {
+                throw ForgetException;
+            }
         }
 
-        public Task PruneAsync(CancellationToken cancellationToken = default)
+        public async Task PruneAsync(CancellationToken cancellationToken = default)
         {
             _log.Add("prune");
 
-            return Task.CompletedTask;
+            PruneStarted.TrySetResult();
+
+            if (PruneGate is not null)
+            {
+                await PruneGate.WaitAsync(cancellationToken);
+            }
+
+            if (PruneException is not null)
+            {
+                throw PruneException;
+            }
         }
 
         public static ResticBackupResult CreateCompleteResult()
