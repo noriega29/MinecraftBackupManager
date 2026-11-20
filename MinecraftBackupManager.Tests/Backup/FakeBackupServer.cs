@@ -17,6 +17,10 @@ namespace MinecraftBackupManager.Tests.Backup
         // guardado queda "desactivado", como pasaría si el servidor no responde.
         public Exception? ResumeException { get; set; }
 
+        // Si se asigna, PrepareForBackupAsync falla con esta excepción
+        // (y el guardado queda "desactivado", hasta que se reactive).
+        public Exception? PrepareException { get; set; }
+
         public Task ConnectAsync(CancellationToken cancellationToken = default)
         {
             _log.Add("connect");
@@ -28,7 +32,13 @@ namespace MinecraftBackupManager.Tests.Backup
         {
             _log.Add("prepare");
 
+            // Igual que MinecraftServer: se marca antes de enviar el comando.
             IsAutosaveDisabled = true;
+
+            if (PrepareException is not null)
+            {
+                return Task.FromException(PrepareException);
+            }
 
             return Task.CompletedTask;
         }

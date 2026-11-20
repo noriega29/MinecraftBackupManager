@@ -15,6 +15,13 @@ namespace MinecraftBackupManager.Tests.Backup
         // Lo que devolverá GetRepositoryStateAsync.
         public ResticRepositoryState State { get; set; } = ResticRepositoryState.Ready;
 
+        // Si se asigna, GetRepositoryStateAsync falla con esta excepción.
+        public Exception? StateException { get; set; }
+
+        // Si se asigna, BackupAsync falla con esta excepción
+        // (después de esperar la compuerta, si hay una).
+        public Exception? BackupException { get; set; }
+
         // Lo que devolverá BackupAsync.
         public ResticBackupResult BackupResult { get; set; } = CreateCompleteResult();
 
@@ -49,6 +56,11 @@ namespace MinecraftBackupManager.Tests.Backup
         {
             _log.Add("repository-state");
 
+            if (StateException is not null)
+            {
+                return Task.FromException<ResticRepositoryState>(StateException);
+            }
+
             return Task.FromResult(State);
         }
 
@@ -64,6 +76,11 @@ namespace MinecraftBackupManager.Tests.Backup
             if (BackupGate is not null)
             {
                 await BackupGate.WaitAsync(cancellationToken);
+            }
+
+            if (BackupException is not null)
+            {
+                throw BackupException;
             }
 
             return BackupResult;

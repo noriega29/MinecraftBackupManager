@@ -495,5 +495,212 @@ namespace MinecraftBackupManager.Tests.Backup
 
             Assert.AreEqual(BackupStatus.Completed, report.Status);
         }
+
+        // ============================================================
+        // ERRORES INESPERADOS
+        // ============================================================
+
+        [TestMethod]
+        public async Task RunBackupAsync_WhenRepositoryCheckThrows_ShouldReturnFailedWithoutTouchingServer()
+        {
+            using var context = new BackupManagerTestContext();
+
+            context.Repository.StateException = new InvalidOperationException("No hay credenciales guardadas.");
+
+            BackupReport report = await context.Manager.RunBackupAsync(ResticBackupKind.Manual).WaitAsync(TestTimeout);
+
+            Assert.AreEqual(BackupStatus.Failed, report.Status);
+            Assert.IsNull(report.ResticResult);
+            Assert.IsTrue(report.AutosaveRestored);
+            StringAssert.Contains(report.Message, "El respaldo falló");
+            StringAssert.Contains(report.Message, "No hay credenciales guardadas.");
+
+            // El servidor no se tocó.
+            CollectionAssert.AreEqual(
+                new[] { "repository-state" },
+                context.Log.Entries.ToArray());
+        }
+
+        [TestMethod]
+        public async Task RunBackupAsync_WhenPrepareThrows_ShouldReturnFailedAndResumeAutosave()
+        {
+            using var context = new BackupManagerTestContext();
+
+            context.Server.PrepareException = new TimeoutException("El servidor no respondió.");
+
+            BackupReport report = await context.Manager.RunBackupAsync(ResticBackupKind.Manual).WaitAsync(TestTimeout);
+
+            Assert.AreEqual(BackupStatus.Failed, report.Status);
+            Assert.IsNull(report.ResticResult);
+            Assert.IsTrue(report.AutosaveRestored);
+            StringAssert.Contains(report.Message, "El servidor no respondió.");
+
+            // No se llegó a respaldar, pero el guardado se reactivó.
+            CollectionAssert.AreEqual(
+                new[] { "repository-state", "prepare", "resume" },
+                context.Log.Entries.ToArray());
+
+            Assert.IsFalse(context.Server.IsAutosaveDisabled);
+        }
+
+        [TestMethod]
+        public async Task RunBackupAsync_WhenBackupThrows_ShouldReturnFailedSkipRetentionAndReleaseLock()
+        {
+            using var context = new BackupManagerTestContext();
+
+            context.Repository.BackupException = new InvalidOperationException("Restic terminó con el código 1.");
+            context.PruneState.ShouldPruneResult = true;
+
+            BackupReport report = await context.Manager.RunBackupAsync(ResticBackupKind.Hourly).WaitAsync(TestTimeout);
+
+            Assert.AreEqual(BackupStatus.Failed, report.Status);
+            Assert.IsNull(report.ResticResult);
+            Assert.IsTrue(report.AutosaveRestored);
+            StringAssert.Contains(report.Message, "Restic terminó con el código 1.");
+
+            // Sin snapshot no hay retención: ni forget ni consulta de prune.
+            CollectionAssert.AreEqual(
+                new[] { "repository-state", "prepare", "backup", "resume" },
+                context.Log.Entries.ToArray());
+
+            // El candado quedó libre: un nuevo respaldo funciona.
+            context.Repository.BackupException = null;
+
+            BackupReport next = await context.Manager.RunBackupAsync(ResticBackupKind.Manual).WaitAsync(TestTimeout);
+
+            Assert.AreEqual(BackupStatus.Completed, next.Status);
+        }
+
+        [TestMethod]
+        public async Task RunBackupAsync_WhenBackupThrowsAndAutosaveCannotBeResumed_ShouldWarnAboutSaveOn()
+        {
+            using var context = new BackupManagerTestContext();
+
+            context.Repository.BackupException = new InvalidOperationException("Restic terminó con el código 1.");
+            context.Server.ResumeException = new InvalidOperationException("sin conexión");
+
+            BackupReport report = await context.Manager.RunBackupAsync(ResticBackupKind.Manual).WaitAsync(TestTimeout);
+
+            Assert.AreEqual(BackupStatus.Failed, report.Status);
+            Assert.IsFalse(report.AutosaveRestored);
+            StringAssert.Contains(report.Message, "Restic terminó con el código 1.");
+            StringAssert.Contains(report.Message, "save-on");
+        }
+
+        [TestMethod]
+        public async Task RunBackupAsync_WhenBackupThrowsOperationCanceledNotRequestedByCaller_ShouldReturnFailed()
+        {
+            using var context = new BackupManagerTestContext();
+
+            // Una cancelación que no pidió quien llamó (por ejemplo, un tiempo
+            // de espera interno) es un fallo, no una cancelación del usuario.
+            context.Repository.BackupException = new OperationCanceledException("tiempo interno agotado");
+
+            BackupReport report = await context.Manager.RunBackupAsync(ResticBackupKind.Manual).WaitAsync(TestTimeout);
+
+            Assert.AreEqual(BackupStatus.Failed, report.Status);
+            Assert.IsTrue(report.AutosaveRestored);
+            StringAssert.Contains(report.Message, "El respaldo falló");
+        }
+
+        [TestMethod]
+        public async Task RunBackupAsync_WhenCanceledDuringRepositoryCheck_ShouldPropagateInsteadOfReturningFailed()
+        {
+            using var context = new BackupManagerTestContext();
+
+            using var cts = new CancellationTokenSource();
+
+            await cts.CancelAsync();
+
+            context.Repository.StateException = new OperationCanceledException(cts.Token);
+
+            await TestAssert.ThrowsAsync<OperationCanceledException>(
+                () => context.Manager.RunBackupAsync(ResticBackupKind.Manual, cts.Token));
+
+            CollectionAssert.AreEqual(
+                new[] { "repository-state" },
+                context.Log.Entries.ToArray());
+        }
+
+        // ============================================================
+        // ERRORES DEL ESTADO DE PRUNE
+        // ============================================================
+
+        [TestMethod]
+        public async Task RunBackupAsync_WhenReadingPruneStateFails_ShouldReturnCompletedWithWarningsAndSkipPrune()
+        {
+            using var context = new BackupManagerTestContext();
+
+            context.PruneState.ShouldPruneException = new IOException("disco lleno");
+
+            BackupReport report = await context.Manager.RunBackupAsync(ResticBackupKind.Hourly).WaitAsync(TestTimeout);
+
+            CollectionAssert.AreEqual(
+                new[]
+                {
+                    "repository-state", "prepare", "backup", "resume",
+                    "forget:Hourly:6",
+                    "prune-state:should-prune"
+                },
+                context.Log.Entries.ToArray());
+
+            Assert.AreEqual(BackupStatus.CompletedWithWarnings, report.Status);
+            Assert.IsTrue(report.AutosaveRestored);
+            Assert.IsNotNull(report.ResticResult);
+            StringAssert.Contains(report.Message, "estado de la compactación");
+        }
+
+        [TestMethod]
+        public async Task RunBackupAsync_WhenRecordingPruneSuccessFails_ShouldReturnCompletedWithWarnings()
+        {
+            using var context = new BackupManagerTestContext();
+
+            context.PruneState.ShouldPruneResult = true;
+            context.PruneState.RecordException = new IOException("disco lleno");
+
+            BackupReport report = await context.Manager.RunBackupAsync(ResticBackupKind.Hourly).WaitAsync(TestTimeout);
+
+            CollectionAssert.AreEqual(
+                new[]
+                {
+                    "repository-state", "prepare", "backup", "resume",
+                    "forget:Hourly:6",
+                    "prune-state:should-prune",
+                    "prune",
+                    "prune-state:success"
+                },
+                context.Log.Entries.ToArray());
+
+            Assert.AreEqual(BackupStatus.CompletedWithWarnings, report.Status);
+            Assert.IsNotNull(report.ResticResult);
+            StringAssert.Contains(report.Message, "guardar el resultado");
+        }
+
+        [TestMethod]
+        public async Task RunBackupAsync_WhenPruneFailsAndRecordingFailureAlsoFails_ShouldMentionBothWarnings()
+        {
+            using var context = new BackupManagerTestContext();
+
+            context.Repository.PruneException = new InvalidOperationException("restic falló");
+            context.PruneState.ShouldPruneResult = true;
+            context.PruneState.RecordException = new IOException("disco lleno");
+
+            BackupReport report = await context.Manager.RunBackupAsync(ResticBackupKind.Hourly).WaitAsync(TestTimeout);
+
+            CollectionAssert.AreEqual(
+                new[]
+                {
+                    "repository-state", "prepare", "backup", "resume",
+                    "forget:Hourly:6",
+                    "prune-state:should-prune",
+                    "prune",
+                    "prune-state:failure"
+                },
+                context.Log.Entries.ToArray());
+
+            Assert.AreEqual(BackupStatus.CompletedWithWarnings, report.Status);
+            StringAssert.Contains(report.Message, "compactar el repositorio");
+            StringAssert.Contains(report.Message, "guardar el resultado");
+        }
     }
 }

@@ -68,7 +68,21 @@ namespace MinecraftBackupManager.Backup
         {
             // 1. Se comprueba el repositorio antes de tocar el servidor: no tiene
             //    sentido desactivar el guardado de un respaldo que no puede hacerse.
-            ResticRepositoryState repositoryState = await _repository.GetRepositoryStateAsync(cancellationToken);
+            ResticRepositoryState repositoryState;
+
+            try
+            {
+                repositoryState = await _repository.GetRepositoryStateAsync(cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                // El servidor aún no se ha tocado: no hay nada que reactivar.
+                return BuildFailedReport(kind, exception, autosaveRestored: true);
+            }
 
             if (repositoryState != ResticRepositoryState.Ready)
             {
@@ -79,9 +93,8 @@ namespace MinecraftBackupManager.Backup
                 return new BackupReport(BackupStatus.Failed, problem, null, kind, AutosaveRestored: true);
             }
 
-            // 2. Preparar el servidor, crear el snapshot y reactivar el guardado.
+            // 2. Preparar el servidor y crear el snapshot.
             ResticBackupResult backup;
-            bool autosaveRestored;
 
             try
             {
@@ -89,11 +102,23 @@ namespace MinecraftBackupManager.Backup
 
                 backup = await _repository.BackupAsync(_serverConfig.ServerDirectory, kind, cancellationToken);
             }
-            finally
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
-                // Siempre se intenta reactivar el guardado, incluso si algo falló o se canceló.
-                autosaveRestored = await ResumeAutosaveSafelyAsync();
+                // Cancelar no es un fallo: se reactiva el guardado y se propaga la cancelación.
+                await ResumeAutosaveSafelyAsync();
+
+                throw;
             }
+            catch (Exception exception)
+            {
+                // Se reactiva el guardado y el fallo se convierte en un informe.
+                bool restored = await ResumeAutosaveSafelyAsync();
+
+                return BuildFailedReport(kind, exception, restored);
+            }
+
+            // Si todo fue bien, también se reactiva el guardado.
+            bool autosaveRestored = await ResumeAutosaveSafelyAsync();
 
             // 3. Retención: solo se aplica a los respaldos automáticos.
             IReadOnlyList<string> retentionWarnings = await ApplyRetentionAsync(kind, autosaveRestored, cancellationToken);
@@ -156,8 +181,28 @@ namespace MinecraftBackupManager.Backup
                 return warnings;
             }
 
+            if (!autosaveRestored)
+            {
+                return warnings;
+            }
+
             // ShouldPrune se consulta al final, solo si todo lo demás permite el prune.
-            if (!autosaveRestored || !_pruneState.ShouldPrune())
+            bool pruneDue;
+
+            try
+            {
+                pruneDue = _pruneState.ShouldPrune();
+            }
+            catch (Exception exception)
+            {
+                TryLog(log => log.Warning(LogCategory.Backup, $"No se pudo leer el estado de la compactación: {exception.Message}"));
+
+                warnings.Add("no se pudo leer el estado de la compactación, por lo que no se compactó el repositorio");
+
+                return warnings;
+            }
+
+            if (!pruneDue)
             {
                 return warnings;
             }
@@ -182,19 +227,37 @@ namespace MinecraftBackupManager.Backup
                 pruneSucceeded = false;
             }
 
-            // Se anota fuera del try: si anotar fallara, no debe confundirse con un fallo del prune.
-            if (pruneSucceeded)
+            if (!pruneSucceeded)
             {
-                _pruneState.RecordPruneSuccess();
-            }
-            else
-            {
-                _pruneState.RecordPruneFailure();
-
                 warnings.Add("no se pudo compactar el repositorio");
             }
 
+            RecordPruneResult(pruneSucceeded, warnings);
+
             return warnings;
+        }
+
+        // Anota el resultado del prune. Si no se puede anotar, solo se avisa:
+        // el respaldo ya se hizo y no debe fallar por esto.
+        private void RecordPruneResult(bool succeeded, List<string> warnings)
+        {
+            try
+            {
+                if (succeeded)
+                {
+                    _pruneState.RecordPruneSuccess();
+                }
+                else
+                {
+                    _pruneState.RecordPruneFailure();
+                }
+            }
+            catch (Exception exception)
+            {
+                TryLog(log => log.Warning(LogCategory.Backup, $"No se pudo guardar el resultado de la compactación: {exception.Message}"));
+
+                warnings.Add("no se pudo guardar el resultado de la compactación");
+            }
         }
 
         // Cuántas copias de ese tipo se conservan, o null si el tipo no se borra automáticamente.
@@ -207,6 +270,21 @@ namespace MinecraftBackupManager.Backup
                 ResticBackupKind.Weekly => _retention.WeeklyCount,
                 _ => null
             };
+        }
+
+        private BackupReport BuildFailedReport(ResticBackupKind kind, Exception exception, bool autosaveRestored)
+        {
+            string message = $"El respaldo falló: {exception.Message}";
+
+            if (!autosaveRestored)
+            {
+                message += " No se pudo reactivar el guardado automático; ejecuta 'save-on' manualmente en el servidor.";
+            }
+
+            // El detalle técnico (incluido el tipo de excepción) queda solo en el log.
+            TryLog(log => log.Error(LogCategory.Backup, $"Respaldo ({kind.ToTag()}) fallido ({exception.GetType().Name}): {exception.Message}"));
+
+            return new BackupReport(BackupStatus.Failed, message, null, kind, autosaveRestored);
         }
 
         private BackupReport BuildReport(ResticBackupKind kind, ResticBackupResult backup, bool autosaveRestored, IReadOnlyList<string> retentionWarnings)

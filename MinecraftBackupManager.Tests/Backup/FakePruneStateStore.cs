@@ -14,6 +14,12 @@ namespace MinecraftBackupManager.Tests.Backup
         // Lo que devolverá ShouldPrune.
         public bool ShouldPruneResult { get; set; }
 
+        // Si se asigna, ShouldPrune falla con esta excepción.
+        public Exception? ShouldPruneException { get; set; }
+
+        // Si se asigna, RecordPruneSuccess y RecordPruneFailure fallan con esta excepción.
+        public Exception? RecordException { get; set; }
+
         public int SuccessCount { get; private set; }
 
         public int FailureCount { get; private set; }
@@ -22,6 +28,11 @@ namespace MinecraftBackupManager.Tests.Backup
         {
             _log.Add("prune-state:should-prune");
 
+            if (ShouldPruneException is not null)
+            {
+                throw ShouldPruneException;
+            }
+
             return ShouldPruneResult;
         }
 
@@ -29,12 +40,22 @@ namespace MinecraftBackupManager.Tests.Backup
         {
             _log.Add("prune-state:success");
 
+            if (RecordException is not null)
+            {
+                throw RecordException;
+            }
+
             SuccessCount++;
         }
 
         public void RecordPruneFailure()
         {
             _log.Add("prune-state:failure");
+
+            if (RecordException is not null)
+            {
+                throw RecordException;
+            }
 
             FailureCount++;
         }
