@@ -2,8 +2,10 @@
 using MinecraftBackupManager.Configuration.Models;
 using MinecraftBackupManager.Logging;
 using MinecraftBackupManager.Logging.Models;
+using MinecraftBackupManager.Minecraft;
 using MinecraftBackupManager.Restic;
 using MinecraftBackupManager.Restic.Models;
+using System.Net.Sockets;
 
 namespace MinecraftBackupManager.Backup
 {
@@ -16,6 +18,7 @@ namespace MinecraftBackupManager.Backup
         private readonly IBackupServer _server;
         private readonly IBackupRepository _repository;
         private readonly IPruneStateStore _pruneState;
+        private readonly IWorldLockProbe _worldLockProbe;
         private readonly MinecraftServerConfig _serverConfig;
         private readonly RetentionConfig _retention;
         private readonly LogManager _logManager;
@@ -25,6 +28,7 @@ namespace MinecraftBackupManager.Backup
             IBackupServer server,
             IBackupRepository repository,
             IPruneStateStore pruneState,
+            IWorldLockProbe worldLockProbe,
             MinecraftServerConfig serverConfig,
             RetentionConfig retention,
             LogManager logManager)
@@ -32,6 +36,7 @@ namespace MinecraftBackupManager.Backup
             _server = server ?? throw new ArgumentNullException(nameof(server));
             _repository = repository ?? throw new ArgumentNullException(nameof(repository));
             _pruneState = pruneState ?? throw new ArgumentNullException(nameof(pruneState));
+            _worldLockProbe = worldLockProbe ?? throw new ArgumentNullException(nameof(worldLockProbe));
             _serverConfig = serverConfig ?? throw new ArgumentNullException(nameof(serverConfig));
             _retention = retention ?? throw new ArgumentNullException(nameof(retention));
             _logManager = logManager ?? throw new ArgumentNullException(nameof(logManager));
@@ -93,7 +98,27 @@ namespace MinecraftBackupManager.Backup
                 return new BackupReport(BackupStatus.Failed, problem, null, kind, AutosaveRestored: true);
             }
 
-            // 2. Preparar el servidor y crear el snapshot.
+            // 2. Se intenta conectar por RCON antes de tocar nada en el servidor.
+            try
+            {
+                await _server.ConnectAsync(cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception exception) when (IsConnectionRefused(exception))
+            {
+                // Nadie escucha en el puerto RCON: el servidor está apagado, o RCON no está activo.
+                return await RunWithoutRconAsync(kind, cancellationToken);
+            }
+            catch (Exception exception)
+            {
+                // Contraseña incorrecta, tiempo agotado, sin credenciales...: no se adivina nada.
+                return BuildFailedReport(kind, exception, autosaveRestored: true);
+            }
+
+            // 3. Preparar el servidor y crear el snapshot.
             ResticBackupResult backup;
 
             try
@@ -120,10 +145,127 @@ namespace MinecraftBackupManager.Backup
             // Si todo fue bien, también se reactiva el guardado.
             bool autosaveRestored = await ResumeAutosaveSafelyAsync();
 
-            // 3. Retención: solo se aplica a los respaldos automáticos.
+            // 4. Retención: solo se aplica a los respaldos automáticos.
             IReadOnlyList<string> retentionWarnings = await ApplyRetentionAsync(kind, autosaveRestored, cancellationToken);
 
-            return BuildReport(kind, backup, autosaveRestored, retentionWarnings);
+            return BuildReport(kind, backup, autosaveRestored, retentionWarnings, serverWasOff: false);
+        }
+
+        // Se llega aquí cuando nadie escucha en el puerto RCON.
+        // Debe llamarse con _backupLock tomado.
+        private async Task<BackupReport> RunWithoutRconAsync(ResticBackupKind kind, CancellationToken cancellationToken)
+        {
+            TryLog(log => log.Information(LogCategory.Backup, "Nadie escucha en el puerto RCON. Se comprueba si el servidor está apagado."));
+
+            SessionLockState lockState;
+
+            try
+            {
+                lockState = _worldLockProbe.CheckWorldLock();
+            }
+            catch (Exception exception)
+            {
+                // Falta server.properties, falta la carpeta del mundo, level-name fuera de la carpeta...
+                return BuildFailedReport(kind, exception, autosaveRestored: true);
+            }
+
+            if (lockState == SessionLockState.InUse)
+            {
+                return BuildServerRunningReport(kind);
+            }
+
+            // El servidor está apagado.
+            if (!_serverConfig.AllowBackupWhenServerIsOff && IsAutomatic(kind))
+            {
+                return BuildSkippedReport(kind);
+            }
+
+            TryLog(log => log.Information(LogCategory.Backup, "El servidor está apagado: se respalda sin RCON."));
+
+            ResticBackupResult backup;
+
+            try
+            {
+                backup = await _repository.BackupAsync(_serverConfig.ServerDirectory, kind, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                // Con el servidor apagado no se tocó el guardado: no hay nada que reactivar.
+                return BuildFailedReport(kind, exception, autosaveRestored: true);
+            }
+
+            var extraWarnings = new List<string>();
+
+            // Si el servidor se encendió mientras se respaldaba, la copia podría ser inconsistente.
+            if (IsWorldLockedNow())
+            {
+                extraWarnings.Add("el servidor se encendió durante el respaldo, por lo que la copia podría ser inconsistente");
+            }
+
+            extraWarnings.AddRange(await ApplyRetentionAsync(kind, autosaveRestored: true, cancellationToken));
+
+            return BuildReport(kind, backup, autosaveRestored: true, extraWarnings, serverWasOff: true);
+        }
+
+        // Vuelve a mirar si el servidor tiene el mundo bloqueado. Si no se puede
+        // comprobar, solo se anota en el log: el respaldo ya se hizo.
+        private bool IsWorldLockedNow()
+        {
+            try
+            {
+                return _worldLockProbe.CheckWorldLock() == SessionLockState.InUse;
+            }
+            catch (Exception exception)
+            {
+                TryLog(log => log.Warning(LogCategory.Backup, $"No se pudo comprobar si el servidor se encendió durante el respaldo: {exception.Message}"));
+
+                return false;
+            }
+        }
+
+        private BackupReport BuildServerRunningReport(ResticBackupKind kind)
+        {
+            string message =
+                $"El servidor parece estar en marcha, pero no se pudo conectar por RCON en {_serverConfig.RconHost}:{_serverConfig.RconPort}. " +
+                "Comprueba que enable-rcon esté en true en server.properties y que el puerto sea el correcto; " +
+                "si el servidor está arrancando, espera a que termine.";
+
+            TryLog(log => log.Error(LogCategory.Backup, $"Respaldo ({kind.ToTag()}) no iniciado: {message}"));
+
+            return new BackupReport(BackupStatus.Failed, message, null, kind, AutosaveRestored: true);
+        }
+
+        private BackupReport BuildSkippedReport(ResticBackupKind kind)
+        {
+            const string message = "Respaldo omitido: el servidor está apagado y la configuración no permite respaldar con el servidor apagado.";
+
+            TryLog(log => log.Information(LogCategory.Backup, $"Respaldo ({kind.ToTag()}) omitido: el servidor está apagado."));
+
+            // No se tocó ni el servidor ni el repositorio.
+            return new BackupReport(BackupStatus.Skipped, message, null, kind, AutosaveRestored: true);
+        }
+
+        private static bool IsAutomatic(ResticBackupKind kind)
+        {
+            return kind is ResticBackupKind.Hourly or ResticBackupKind.Daily or ResticBackupKind.Weekly;
+        }
+
+        // Busca también en las excepciones internas, por si la original viene envuelta.
+        private static bool IsConnectionRefused(Exception exception)
+        {
+            for (Exception? current = exception; current is not null; current = current.InnerException)
+            {
+                if (current is SocketException { SocketErrorCode: SocketError.ConnectionRefused })
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         // Devuelve true si se confirmó la reactivación. Nunca lanza excepciones:
@@ -287,7 +429,12 @@ namespace MinecraftBackupManager.Backup
             return new BackupReport(BackupStatus.Failed, message, null, kind, autosaveRestored);
         }
 
-        private BackupReport BuildReport(ResticBackupKind kind, ResticBackupResult backup, bool autosaveRestored, IReadOnlyList<string> retentionWarnings)
+        private BackupReport BuildReport(
+            ResticBackupKind kind,
+            ResticBackupResult backup,
+            bool autosaveRestored,
+            IReadOnlyList<string> extraWarnings,
+            bool serverWasOff)
         {
             var warnings = new List<string>();
 
@@ -301,13 +448,17 @@ namespace MinecraftBackupManager.Backup
                 warnings.Add("no se pudo reactivar el guardado automático; ejecuta 'save-on' manualmente en el servidor");
             }
 
-            warnings.AddRange(retentionWarnings);
+            warnings.AddRange(extraWarnings);
 
             if (warnings.Count == 0)
             {
                 TryLog(log => log.Information(LogCategory.Backup, $"Respaldo ({kind.ToTag()}) finalizado correctamente."));
 
-                return new BackupReport(BackupStatus.Completed, "Respaldo completado.", backup, kind, autosaveRestored);
+                string successMessage = serverWasOff
+                    ? "Respaldo completado con el servidor apagado."
+                    : "Respaldo completado.";
+
+                return new BackupReport(BackupStatus.Completed, successMessage, backup, kind, autosaveRestored);
             }
 
             string message = $"Respaldo completado con advertencias: {string.Join("; ", warnings)}.";

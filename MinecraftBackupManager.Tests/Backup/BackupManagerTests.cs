@@ -20,7 +20,7 @@ namespace MinecraftBackupManager.Tests.Backup
             BackupReport report = await context.Manager.RunBackupAsync(ResticBackupKind.Manual).WaitAsync(TestTimeout);
 
             CollectionAssert.AreEqual(
-                new[] { "repository-state", "prepare", "backup", "resume" },
+                new[] { "repository-state", "connect", "prepare", "backup", "resume" },
                 context.Log.Entries.ToArray());
 
             Assert.AreEqual(BackupStatus.Completed, report.Status);
@@ -61,8 +61,8 @@ namespace MinecraftBackupManager.Tests.Backup
             CollectionAssert.AreEqual(
                 new[]
                 {
-                    "repository-state", "prepare", "backup", "resume",
-                    "repository-state", "prepare", "backup", "resume"
+                    "repository-state", "connect", "prepare", "backup", "resume",
+                    "repository-state", "connect", "prepare", "backup", "resume"
                 },
                 context.Log.Entries.ToArray());
         }
@@ -180,7 +180,7 @@ namespace MinecraftBackupManager.Tests.Backup
 
             // El segundo intento no hizo ninguna llamada: solo aparece lo del primero.
             CollectionAssert.AreEqual(
-                new[] { "repository-state", "prepare", "backup" },
+                new[] { "repository-state", "connect", "prepare", "backup" },
                 context.Log.Entries.ToArray());
 
             gate.SetResult();
@@ -215,7 +215,7 @@ namespace MinecraftBackupManager.Tests.Backup
 
             // El guardado se reactivó a pesar de la cancelación.
             CollectionAssert.AreEqual(
-                new[] { "repository-state", "prepare", "backup", "resume" },
+                new[] { "repository-state", "connect", "prepare", "backup", "resume" },
                 context.Log.Entries.ToArray());
 
             Assert.IsFalse(context.Server.IsAutosaveDisabled);
@@ -266,7 +266,7 @@ namespace MinecraftBackupManager.Tests.Backup
             CollectionAssert.AreEqual(
                 new[]
                 {
-                    "repository-state", "prepare", "backup", "resume",
+                    "repository-state", "connect", "prepare", "backup", "resume",
                     $"forget:{kind}:{expectedKeepLast}",
                     "prune-state:should-prune"
                 },
@@ -288,7 +288,7 @@ namespace MinecraftBackupManager.Tests.Backup
             BackupReport report = await context.Manager.RunBackupAsync(kind).WaitAsync(TestTimeout);
 
             CollectionAssert.AreEqual(
-                new[] { "repository-state", "prepare", "backup", "resume" },
+                new[] { "repository-state", "connect", "prepare", "backup", "resume" },
                 context.Log.Entries.ToArray());
 
             Assert.AreEqual(BackupStatus.Completed, report.Status);
@@ -306,7 +306,7 @@ namespace MinecraftBackupManager.Tests.Backup
             CollectionAssert.AreEqual(
                 new[]
                 {
-                    "repository-state", "prepare", "backup", "resume",
+                    "repository-state", "connect", "prepare", "backup", "resume",
                     "forget:Hourly:6",
                     "prune-state:should-prune",
                     "prune",
@@ -331,7 +331,7 @@ namespace MinecraftBackupManager.Tests.Backup
 
             // Sin forget exitoso no se consulta ShouldPrune ni se hace prune.
             CollectionAssert.AreEqual(
-                new[] { "repository-state", "prepare", "backup", "resume", "forget:Hourly:6" },
+                new[] { "repository-state", "connect", "prepare", "backup", "resume", "forget:Hourly:6" },
                 context.Log.Entries.ToArray());
 
             Assert.AreEqual(BackupStatus.CompletedWithWarnings, report.Status);
@@ -355,7 +355,7 @@ namespace MinecraftBackupManager.Tests.Backup
             CollectionAssert.AreEqual(
                 new[]
                 {
-                    "repository-state", "prepare", "backup", "resume",
+                    "repository-state", "connect", "prepare", "backup", "resume",
                     "forget:Hourly:6",
                     "prune-state:should-prune",
                     "prune",
@@ -382,7 +382,7 @@ namespace MinecraftBackupManager.Tests.Backup
 
             // forget sí se aplica; prune no, y ni siquiera se consulta ShouldPrune.
             CollectionAssert.AreEqual(
-                new[] { "repository-state", "prepare", "backup", "resume", "forget:Hourly:6" },
+                new[] { "repository-state", "connect", "prepare", "backup", "resume", "forget:Hourly:6" },
                 context.Log.Entries.ToArray());
 
             Assert.AreEqual(BackupStatus.CompletedWithWarnings, report.Status);
@@ -407,7 +407,7 @@ namespace MinecraftBackupManager.Tests.Backup
             CollectionAssert.AreEqual(
                 new[]
                 {
-                    "repository-state", "prepare", "backup", "resume",
+                    "repository-state", "connect", "prepare", "backup", "resume",
                     "forget:Hourly:6",
                     "prune-state:should-prune",
                     "prune",
@@ -439,7 +439,7 @@ namespace MinecraftBackupManager.Tests.Backup
             await TestAssert.ThrowsAsync<OperationCanceledException>(() => task.WaitAsync(TestTimeout));
 
             CollectionAssert.AreEqual(
-                new[] { "repository-state", "prepare", "backup", "resume", "forget:Hourly:6" },
+                new[] { "repository-state", "connect", "prepare", "backup", "resume", "forget:Hourly:6" },
                 context.Log.Entries.ToArray());
 
             // El guardado ya se había reactivado antes de empezar la retención.
@@ -478,7 +478,7 @@ namespace MinecraftBackupManager.Tests.Backup
             CollectionAssert.AreEqual(
                 new[]
                 {
-                    "repository-state", "prepare", "backup", "resume",
+                    "repository-state", "connect", "prepare", "backup", "resume",
                     "forget:Hourly:6",
                     "prune-state:should-prune",
                     "prune"
@@ -537,7 +537,7 @@ namespace MinecraftBackupManager.Tests.Backup
 
             // No se llegó a respaldar, pero el guardado se reactivó.
             CollectionAssert.AreEqual(
-                new[] { "repository-state", "prepare", "resume" },
+                new[] { "repository-state", "connect", "prepare", "resume" },
                 context.Log.Entries.ToArray());
 
             Assert.IsFalse(context.Server.IsAutosaveDisabled);
@@ -560,7 +560,7 @@ namespace MinecraftBackupManager.Tests.Backup
 
             // Sin snapshot no hay retención: ni forget ni consulta de prune.
             CollectionAssert.AreEqual(
-                new[] { "repository-state", "prepare", "backup", "resume" },
+                new[] { "repository-state", "connect", "prepare", "backup", "resume" },
                 context.Log.Entries.ToArray());
 
             // El candado quedó libre: un nuevo respaldo funciona.
@@ -638,7 +638,7 @@ namespace MinecraftBackupManager.Tests.Backup
             CollectionAssert.AreEqual(
                 new[]
                 {
-                    "repository-state", "prepare", "backup", "resume",
+                    "repository-state", "connect", "prepare", "backup", "resume",
                     "forget:Hourly:6",
                     "prune-state:should-prune"
                 },
@@ -663,7 +663,7 @@ namespace MinecraftBackupManager.Tests.Backup
             CollectionAssert.AreEqual(
                 new[]
                 {
-                    "repository-state", "prepare", "backup", "resume",
+                    "repository-state", "connect", "prepare", "backup", "resume",
                     "forget:Hourly:6",
                     "prune-state:should-prune",
                     "prune",
@@ -690,7 +690,7 @@ namespace MinecraftBackupManager.Tests.Backup
             CollectionAssert.AreEqual(
                 new[]
                 {
-                    "repository-state", "prepare", "backup", "resume",
+                    "repository-state", "connect", "prepare", "backup", "resume",
                     "forget:Hourly:6",
                     "prune-state:should-prune",
                     "prune",

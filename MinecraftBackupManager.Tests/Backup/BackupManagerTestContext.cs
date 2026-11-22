@@ -17,6 +17,10 @@ namespace MinecraftBackupManager.Tests.Backup
 
         public FakePruneStateStore PruneState { get; }
 
+        public FakeWorldLockProbe WorldLock { get; }
+
+        public MinecraftServerConfig ServerConfig { get; }
+
         public RetentionConfig Retention { get; }
 
         // Ruta del "servidor" a respaldar. No se crea: los sustitutos no la usan.
@@ -39,9 +43,10 @@ namespace MinecraftBackupManager.Tests.Backup
             Server = new FakeBackupServer(Log);
             Repository = new FakeBackupRepository(Log);
             PruneState = new FakePruneStateStore(Log);
+            WorldLock = new FakeWorldLockProbe(Log);
             Retention = new RetentionConfig();
 
-            var serverConfig = new MinecraftServerConfig
+            ServerConfig = new MinecraftServerConfig
             {
                 ServerDirectory = ServerDirectory
             };
@@ -50,7 +55,8 @@ namespace MinecraftBackupManager.Tests.Backup
                 Server,
                 Repository,
                 PruneState,
-                serverConfig,
+                WorldLock,
+                ServerConfig,
                 Retention,
                 new LogManager(paths));
         }

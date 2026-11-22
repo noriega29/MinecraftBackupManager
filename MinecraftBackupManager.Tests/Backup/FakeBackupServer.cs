@@ -21,9 +21,17 @@ namespace MinecraftBackupManager.Tests.Backup
         // (y el guardado queda "desactivado", hasta que se reactive).
         public Exception? PrepareException { get; set; }
 
+        // Si se asigna, ConnectAsync falla con esta excepción.
+        public Exception? ConnectException { get; set; }
+
         public Task ConnectAsync(CancellationToken cancellationToken = default)
         {
             _log.Add("connect");
+
+            if (ConnectException is not null)
+            {
+                return Task.FromException(ConnectException);
+            }
 
             return Task.CompletedTask;
         }
