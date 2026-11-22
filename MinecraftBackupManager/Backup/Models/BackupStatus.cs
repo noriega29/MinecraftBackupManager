@@ -5,6 +5,12 @@
         Completed,
         CompletedWithWarnings,
         Failed,
-        AlreadyRunning
+        AlreadyRunning,
+
+        /// <summary>
+        /// El respaldo no se hizo a propósito: el servidor está apagado y la
+        /// configuración no permite respaldar en ese caso. No es un error.
+        /// </summary>
+        Skipped
     }
 }
