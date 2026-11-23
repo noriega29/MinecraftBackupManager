@@ -12,6 +12,7 @@ namespace MinecraftBackupManager.Tests.Minecraft.MinecraftServerTest
         public const string Password = "test-password";
         public const string CommandResponse = "OK";
         private int _connectionCount;
+        private int _disposed;
 
         private readonly TcpListener _listener;
         private readonly CancellationTokenSource _cancellation = new();
@@ -169,6 +170,12 @@ namespace MinecraftBackupManager.Tests.Minecraft.MinecraftServerTest
 
         public async ValueTask DisposeAsync()
         {
+            // Segunda llamada o posteriores: no hacer nada.
+            if (Interlocked.Exchange(ref _disposed, 1) == 1)
+            {
+                return;
+            }
+
             await _cancellation.CancelAsync();
 
             _listener.Stop();
