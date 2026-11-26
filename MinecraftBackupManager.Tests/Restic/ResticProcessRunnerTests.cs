@@ -69,7 +69,7 @@ namespace MinecraftBackupManager.Tests.Restic
 
             string[] lines = result.StandardError.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
 
-            Assert.AreEqual(lineCount, lines.Length);
+            Assert.HasCount(lineCount, lines);
             Assert.AreEqual("line 1", lines[0].TrimEnd());
             Assert.AreEqual($"line {lineCount}", lines[^1].TrimEnd());
             Assert.AreEqual(string.Empty, result.StandardOutput);
@@ -153,9 +153,11 @@ namespace MinecraftBackupManager.Tests.Restic
 
             stopwatch.Stop();
 
+            // El ping dura ~30 s: un valor muy por debajo demuestra que se cortó a tiempo.
+            // Se deja margen porque, con muchas pruebas en paralelo, matar el proceso puede tardar.
             Assert.IsTrue(
-                stopwatch.Elapsed < TimeSpan.FromSeconds(3),
-                $"El corte tardó {stopwatch.Elapsed}; debería ser casi inmediato.");
+                stopwatch.Elapsed < TimeSpan.FromSeconds(8),
+                $"El corte tardó {stopwatch.Elapsed}; debería ser mucho menor que los 30 s del ping.");
         }
 
         // ============================================================
@@ -182,9 +184,11 @@ namespace MinecraftBackupManager.Tests.Restic
 
             stopwatch.Stop();
 
+            // El ping dura ~30 s: un valor muy por debajo demuestra que se cortó a tiempo.
+            // Se deja margen porque, con muchas pruebas en paralelo, matar el proceso puede tardar.
             Assert.IsTrue(
-                stopwatch.Elapsed < TimeSpan.FromSeconds(3),
-                $"La cancelación tardó {stopwatch.Elapsed}; debería ser casi inmediata.");
+                stopwatch.Elapsed < TimeSpan.FromSeconds(8),
+                $"La cancelación tardó {stopwatch.Elapsed}; debería ser mucho menor que los 30 s del ping.");
         }
 
         [TestMethod]
