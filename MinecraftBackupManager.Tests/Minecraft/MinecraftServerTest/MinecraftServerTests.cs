@@ -1,4 +1,6 @@
-﻿namespace MinecraftBackupManager.Tests.Minecraft.MinecraftServerTest
+﻿using System.Net.Sockets;
+
+namespace MinecraftBackupManager.Tests.Minecraft.MinecraftServerTest
 {
     [TestClass]
     public sealed class MinecraftServerTests
@@ -119,6 +121,21 @@
 
             Assert.AreEqual(2, context.FakeServer.ConnectionCount);
             Assert.IsFalse(context.Server.IsAutosaveDisabled);
+        }
+
+        [TestMethod]
+        public async Task ConnectAsync_WhenNobodyListensOnThePort_ShouldThrowSocketExceptionWithConnectionRefused()
+        {
+            await using var context = new ServerTestContext();
+
+            // Se apaga el servidor falso: el puerto queda cerrado, como con un Minecraft apagado.
+            await context.FakeServer.DisposeAsync();
+
+            SocketException exception = await TestAssert.ThrowsAsync<SocketException>(
+                () => context.Server.ConnectAsync().WaitAsync(TestTimeout));
+
+            // Es exactamente lo que BackupManager usa para decidir que el servidor está apagado.
+            Assert.AreEqual(SocketError.ConnectionRefused, exception.SocketErrorCode);
         }
     }
 }

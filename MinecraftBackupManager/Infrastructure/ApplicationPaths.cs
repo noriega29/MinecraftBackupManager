@@ -7,9 +7,8 @@
         public string DataDirectory { get; }
 
         public string ConfigurationFile => Path.Combine(DataDirectory, "config.json");
-
         public string CredentialsFile => Path.Combine(DataDirectory, "credentials.dat");
-
+        public string PruneStateFile => Path.Combine(DataDirectory, "prune-state.json");
         public string LogsDirectory => Path.Combine(DataDirectory, "Logs");
 
         public ApplicationPaths()

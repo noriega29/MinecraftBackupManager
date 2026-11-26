@@ -52,6 +52,12 @@ namespace MinecraftBackupManager.Tests.Backup
 
         public TaskCompletionSource PruneStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
+        // Lo que devolverá ListSnapshotsAsync (sin aplicar el filtro por tipo).
+        public IReadOnlyList<ResticSnapshot> Snapshots { get; set; } = Array.Empty<ResticSnapshot>();
+
+        // Si se asigna, ListSnapshotsAsync falla con esta excepción.
+        public Exception? ListSnapshotsException { get; set; }
+
         public Task<ResticRepositoryState> GetRepositoryStateAsync(CancellationToken cancellationToken = default)
         {
             _log.Add("repository-state");
@@ -90,7 +96,12 @@ namespace MinecraftBackupManager.Tests.Backup
         {
             _log.Add("list-snapshots");
 
-            return Task.FromResult<IReadOnlyList<ResticSnapshot>>(Array.Empty<ResticSnapshot>());
+            if (ListSnapshotsException is not null)
+            {
+                return Task.FromException<IReadOnlyList<ResticSnapshot>>(ListSnapshotsException);
+            }
+
+            return Task.FromResult(Snapshots);
         }
 
         public async Task ForgetAsync(ResticBackupKind kind, int keepLast, CancellationToken cancellationToken = default)
