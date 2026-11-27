@@ -24,6 +24,12 @@ namespace MinecraftBackupManager.Tests.Backup
         // Si se asigna, ConnectAsync falla con esta excepción.
         public Exception? ConnectException { get; set; }
 
+        // Si se asigna, ResumeAutosaveAsync no termina hasta que este Task termine.
+        public Task? ResumeGate { get; set; }
+
+        // Se completa en cuanto ResumeAutosaveAsync empieza a ejecutarse.
+        public TaskCompletionSource ResumeStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         public Task ConnectAsync(CancellationToken cancellationToken = default)
         {
             _log.Add("connect");
@@ -51,18 +57,23 @@ namespace MinecraftBackupManager.Tests.Backup
             return Task.CompletedTask;
         }
 
-        public Task ResumeAutosaveAsync(CancellationToken cancellationToken = default)
+        public async Task ResumeAutosaveAsync(CancellationToken cancellationToken = default)
         {
             _log.Add("resume");
 
+            ResumeStarted.TrySetResult();
+
+            if (ResumeGate is not null)
+            {
+                await ResumeGate.WaitAsync(cancellationToken);
+            }
+
             if (ResumeException is not null)
             {
-                return Task.FromException(ResumeException);
+                throw ResumeException;
             }
 
             IsAutosaveDisabled = false;
-
-            return Task.CompletedTask;
         }
     }
 }

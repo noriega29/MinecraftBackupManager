@@ -22,6 +22,8 @@ namespace MinecraftBackupManager.Backup
         private readonly MinecraftServerConfig _serverConfig;
         private readonly RetentionConfig _retention;
         private readonly LogManager _logManager;
+        // Se cancela al detener el gestor y no se reinicia.
+        private readonly CancellationTokenSource _stopSource = new();
         private readonly SemaphoreSlim _backupLock = new(1, 1);
 
         public BackupManager(
@@ -55,6 +57,8 @@ namespace MinecraftBackupManager.Backup
                 throw new ArgumentOutOfRangeException(nameof(kind), kind, "El tipo de respaldo no es válido.");
             }
 
+            ThrowIfStopped();
+
             // Wait(0): si hay otro respaldo en curso, no se espera ni se lanza una excepción.
             if (!_backupLock.Wait(0))
             {
@@ -66,11 +70,44 @@ namespace MinecraftBackupManager.Backup
 
             try
             {
-                return await RunCoreAsync(kind, cancellationToken);
+                // Se comprueba otra vez con el candado tomado: StopAsync pudo llegar justo antes.
+                ThrowIfStopped();
+
+                // Se cancela si lo pide quien llamó o si se detiene el gestor.
+                using var linkedSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _stopSource.Token);
+
+                return await RunCoreAsync(kind, linkedSource.Token);
             }
             finally
             {
                 _backupLock.Release();
+            }
+        }
+
+        /// <summary>
+        /// Detiene el gestor: cancela el respaldo en curso, espera a que termine
+        /// (incluido el intento de reactivar el guardado) e impide empezar otros.
+        /// </summary>
+        public async Task StopAsync()
+        {
+            if (IsRunning)
+            {
+                TryLog(log => log.Warning(LogCategory.Backup, "Deteniendo el gestor de respaldos: se cancela el respaldo en curso."));
+            }
+
+            await _stopSource.CancelAsync();
+
+            // El candado solo queda libre cuando el respaldo ha terminado del todo.
+            await _backupLock.WaitAsync();
+
+            _backupLock.Release();
+        }
+
+        private void ThrowIfStopped()
+        {
+            if (_stopSource.IsCancellationRequested)
+            {
+                throw new InvalidOperationException("El gestor de respaldos está detenido.");
             }
         }
 

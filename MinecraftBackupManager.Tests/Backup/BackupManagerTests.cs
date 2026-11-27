@@ -259,6 +259,91 @@ namespace MinecraftBackupManager.Tests.Backup
         }
 
         // ============================================================
+        // DETENER EL GESTOR: StopAsync
+        // ============================================================
+
+        [TestMethod]
+        public async Task StopAsync_WithoutBackup_ShouldCompleteEvenIfCalledTwice()
+        {
+            using var context = new BackupManagerTestContext();
+
+            await context.Manager.StopAsync().WaitAsync(TestTimeout);
+            await context.Manager.StopAsync().WaitAsync(TestTimeout);
+
+            Assert.IsFalse(context.Manager.IsRunning);
+            Assert.IsEmpty(context.Log.Entries);
+        }
+
+        [TestMethod]
+        public async Task StopAsync_DuringBackup_ShouldCancelItAndWaitUntilAutosaveIsResumed()
+        {
+            using var context = new BackupManagerTestContext();
+
+            // La compuerta del respaldo nunca se abre: solo termina por cancelación.
+            var backupGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var resumeGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            context.Repository.BackupGate = backupGate.Task;
+            context.Server.ResumeGate = resumeGate.Task;
+
+            Task<BackupReport> backup = context.Manager.RunBackupAsync(ResticBackupKind.Manual);
+
+            await context.Repository.BackupStarted.Task.WaitAsync(TestTimeout);
+
+            Task stop = context.Manager.StopAsync();
+
+            await context.Server.ResumeStarted.Task.WaitAsync(TestTimeout);
+
+            // El guardado todavía se está reactivando: StopAsync debe seguir esperando.
+            Assert.IsFalse(stop.IsCompleted);
+            Assert.IsTrue(context.Manager.IsRunning);
+
+            resumeGate.SetResult();
+
+            await stop.WaitAsync(TestTimeout);
+            await TestAssert.ThrowsAsync<OperationCanceledException>(() => backup.WaitAsync(TestTimeout));
+
+            CollectionAssert.AreEqual(
+                new[] { "repository-state", "connect", "prepare", "backup", "resume" },
+                context.Log.Entries.ToArray());
+
+            Assert.IsFalse(context.Server.IsAutosaveDisabled);
+            Assert.IsFalse(context.Manager.IsRunning);
+        }
+
+        [TestMethod]
+        public async Task StopAsync_DuringRetention_ShouldCancelIt()
+        {
+            using var context = new BackupManagerTestContext();
+
+            var forgetGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            context.Repository.ForgetGate = forgetGate.Task;
+
+            Task<BackupReport> backup = context.Manager.RunBackupAsync(ResticBackupKind.Hourly);
+
+            await context.Repository.ForgetStarted.Task.WaitAsync(TestTimeout);
+            await context.Manager.StopAsync().WaitAsync(TestTimeout);
+
+            await TestAssert.ThrowsAsync<OperationCanceledException>(() => backup.WaitAsync(TestTimeout));
+
+            Assert.IsFalse(context.Manager.IsRunning);
+        }
+
+        [TestMethod]
+        public async Task RunBackupAsync_AfterStop_ShouldThrowWithoutCallingAnything()
+        {
+            using var context = new BackupManagerTestContext();
+
+            await context.Manager.StopAsync().WaitAsync(TestTimeout);
+
+            await TestAssert.ThrowsAsync<InvalidOperationException>(
+                () => context.Manager.RunBackupAsync(ResticBackupKind.Manual));
+
+            Assert.IsEmpty(context.Log.Entries);
+        }
+
+        // ============================================================
         // CANCELACIÓN
         // ============================================================
 
