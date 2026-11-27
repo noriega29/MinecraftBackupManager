@@ -28,6 +28,37 @@ public sealed class ConsoleUI
         return Console.ReadLine()?.Trim() ?? string.Empty;
     }
 
+    // El texto de "label" va sin dos puntos: se añaden después del valor por defecto.
+    public string ReadWithDefault(string label, string defaultValue)
+    {
+        string input = ReadInput($"{label} [{defaultValue}]: ");
+
+        return input.Length == 0 ? defaultValue : input;
+    }
+
+    public string ReadPath(string prompt)
+    {
+        return ConsoleInput.CleanPath(ReadInput(prompt));
+    }
+
+    // No recorta espacios: pueden formar parte de la contraseña.
+    public string ReadPassword(string prompt)
+    {
+        Console.Write(prompt);
+
+        // Con la entrada redirigida no se puede leer tecla a tecla.
+        if (Console.IsInputRedirected)
+        {
+            return Console.ReadLine() ?? string.Empty;
+        }
+
+        string password = ConsoleInput.ReadMasked(() => Console.ReadKey(intercept: true), Console.Write);
+
+        Console.WriteLine();
+
+        return password;
+    }
+
     public void Pause()
     {
         Console.WriteLine();
