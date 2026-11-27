@@ -2,17 +2,30 @@
 using MinecraftBackupManager.Infrastructure;
 using MinecraftBackupManager.UI;
 
-using var instanceGuard = new SingleInstanceGuard();
+try
+{
+    // "using" mantiene la marca mientras se ejecuta este bloque.
+    using var instanceGuard = new SingleInstanceGuard();
 
-if (!instanceGuard.IsFirstInstance)
+    if (!instanceGuard.IsFirstInstance)
+    {
+        var console = new ConsoleUI();
+
+        console.WriteLine("La aplicación ya está abierta.");
+        console.Pause();
+
+        return;
+    }
+
+    var application = new Application();
+    await application.RunAsync();
+}
+catch (Exception exception)
 {
     var console = new ConsoleUI();
 
-    console.WriteLine("La aplicación ya está abierta.");
+    console.WriteLine();
+    console.WriteLine("La aplicación no pudo continuar:");
+    console.WriteLine(exception.Message);
     console.Pause();
-
-    return;
 }
-
-var application = new Application();
-application.Run();
