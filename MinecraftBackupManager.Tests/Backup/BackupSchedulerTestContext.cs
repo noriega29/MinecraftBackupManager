@@ -49,7 +49,8 @@ namespace MinecraftBackupManager.Tests.Backup
         // Por defecto: miércoles 25 de noviembre de 2026, 14:20 (zona UTC).
         public BackupSchedulerTestContext(
             string utcNow = "2026-11-25T14:20:00Z",
-            int minuteOfHour = BackupScheduler.DefaultMinuteOfHour)
+            int minuteOfHour = BackupScheduler.DefaultMinuteOfHour,
+            TimeZoneInfo? localTimeZone = null)
         {
             _rootDirectory = Path.Combine(
                 Path.GetTempPath(),
@@ -61,6 +62,12 @@ namespace MinecraftBackupManager.Tests.Backup
             _backupLogPath = Path.Combine(paths.LogsDirectory, "backup.log");
 
             Clock = new FakeTimeProvider(DateTimeOffset.Parse(utcNow, CultureInfo.InvariantCulture));
+
+            if (localTimeZone is not null)
+            {
+                Clock.SetLocalTimeZone(localTimeZone);
+            }
+
             LogManager = new LogManager(paths);
 
             Server = new FakeBackupServer(Log);

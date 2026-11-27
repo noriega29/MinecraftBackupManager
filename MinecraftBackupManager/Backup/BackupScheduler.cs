@@ -141,22 +141,29 @@ namespace MinecraftBackupManager.Backup
         {
             try
             {
-                DateTime lastSlot = DateTime.MinValue;
+                DateTimeOffset previousSlot = DateTimeOffset.MinValue;
+                bool previousCycleRanBackup = false;
 
                 while (!cancellationToken.IsCancellationRequested)
                 {
-                    DateTime now = _timeProvider.GetLocalNow().DateTime;
+                    DateTimeOffset now = _timeProvider.GetUtcNow();
 
                     // Se parte del mayor entre "ahora" y el último horario atendido: si el
                     // temporizador despertara unos milisegundos antes, no se repetiría el mismo :00.
-                    DateTime slot = GetNextSlot(now > lastSlot ? now : lastSlot);
+                    DateTimeOffset slot = GetNextSlot(now > previousSlot ? now : previousSlot);
 
-                    lastSlot = slot;
+                    if (previousCycleRanBackup)
+                    {
+                        LogSkippedSlots(previousSlot, slot);
+                    }
+
+                    previousSlot = slot;
 
                     try
                     {
                         await Task.Delay(slot - now, _timeProvider, cancellationToken);
-                        await RunCycleAsync(slot, cancellationToken);
+
+                        previousCycleRanBackup = await RunCycleAsync(slot, cancellationToken);
                     }
                     catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                     {
@@ -171,10 +178,11 @@ namespace MinecraftBackupManager.Backup
             }
         }
 
-        // Debe llamarse solo desde el bucle. Nunca lanza excepciones, salvo la cancelación pedida.
-        private async Task RunCycleAsync(DateTime slot, CancellationToken cancellationToken)
+        // Debe llamarse solo desde el bucle. Devuelve true si el ciclo llegó a lanzar un respaldo.
+        // Nunca lanza excepciones, salvo la cancelación pedida.
+        private async Task<bool> RunCycleAsync(DateTimeOffset slot, CancellationToken cancellationToken)
         {
-            string slotText = slot.ToString("HH:mm", CultureInfo.InvariantCulture);
+            string slotText = FormatLocalTime(slot);
 
             try
             {
@@ -182,10 +190,11 @@ namespace MinecraftBackupManager.Backup
                 {
                     TryLog(log => log.Information(LogCategory.Backup, $"Ciclo de las {slotText} omitido: los respaldos automáticos están en pausa."));
 
-                    return;
+                    return false;
                 }
 
-                TimeSpan lateness = _timeProvider.GetLocalNow().DateTime - slot;
+                // Se mide entre instantes reales: un cambio de horario no cuenta como retraso.
+                TimeSpan lateness = _timeProvider.GetUtcNow() - slot;
 
                 if (lateness > MaximumLateness)
                 {
@@ -193,7 +202,7 @@ namespace MinecraftBackupManager.Backup
 
                     TryLog(log => log.Warning(LogCategory.Backup, $"Ciclo de las {slotText} omitido: empezó con {minutes} minutos de retraso (el equipo pudo estar suspendido)."));
 
-                    return;
+                    return false;
                 }
 
                 IReadOnlyList<ResticSnapshot> snapshots;
@@ -210,7 +219,7 @@ namespace MinecraftBackupManager.Backup
                 {
                     TryLog(log => log.Error(LogCategory.Backup, $"Ciclo de las {slotText} omitido: no se pudo leer la lista de snapshots: {exception.Message}"));
 
-                    return;
+                    return false;
                 }
 
                 ResticBackupKind kind = _kindSelector.Select(snapshots);
@@ -220,6 +229,8 @@ namespace MinecraftBackupManager.Backup
                 TryLog(log => log.Information(LogCategory.Backup, $"Respaldo automático ({kind.ToTag()}) de las {slotText}: {report.Status}."));
 
                 RaiseBackupCompleted(report);
+
+                return true;
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -228,16 +239,47 @@ namespace MinecraftBackupManager.Backup
             catch (Exception exception)
             {
                 TryLog(log => log.Error(LogCategory.Backup, $"Error inesperado en el ciclo de las {slotText}: {exception.Message}"));
+
+                return false;
             }
         }
 
-        // El próximo instante estrictamente posterior a "reference" con el minuto configurado y segundo 0.
-        // Se trabaja con la hora local: en zonas con desfases de 30 o 45 minutos, el minuto UTC no sirve.
-        private DateTime GetNextSlot(DateTime reference)
+        // El próximo instante estrictamente posterior a "reference" cuyo minuto local es el configurado
+        // y cuyo segundo es 0. Solo se mira el minuto y el segundo locales, no la hora del reloj: así un
+        // cambio de horario de verano no desplaza el cálculo. Devuelve un instante real (UTC).
+        private DateTimeOffset GetNextSlot(DateTimeOffset reference)
         {
-            var candidate = new DateTime(reference.Year, reference.Month, reference.Day, reference.Hour, _minuteOfHour, 0);
+            DateTimeOffset local = TimeZoneInfo.ConvertTime(reference, _timeProvider.LocalTimeZone);
 
-            return candidate > reference ? candidate : candidate.AddHours(1);
+            long ticksIntoHour = local.Ticks % TimeSpan.TicksPerHour;
+            long delta = _minuteOfHour * TimeSpan.TicksPerMinute - ticksIntoHour;
+
+            if (delta <= 0)
+            {
+                delta += TimeSpan.TicksPerHour;
+            }
+
+            return reference.AddTicks(delta);
+        }
+
+        private string FormatLocalTime(DateTimeOffset instant)
+        {
+            return TimeZoneInfo.ConvertTime(instant, _timeProvider.LocalTimeZone).ToString("HH:mm", CultureInfo.InvariantCulture);
+        }
+
+        // Si el respaldo anterior duró más de una hora, los :00 que pasaron mientras tanto se omitieron.
+        private void LogSkippedSlots(DateTimeOffset previousSlot, DateTimeOffset nextSlot)
+        {
+            int skipped = (int)Math.Round((nextSlot - previousSlot).TotalHours) - 1;
+
+            if (skipped <= 0)
+            {
+                return;
+            }
+
+            string previousText = FormatLocalTime(previousSlot);
+
+            TryLog(log => log.Warning(LogCategory.Backup, $"El respaldo de las {previousText} duró más de una hora: se omitieron {skipped} ciclo(s) automático(s) mientras estaba en curso."));
         }
 
         // Cada suscriptor se avisa por separado: si uno falla, los demás reciben el informe igualmente.

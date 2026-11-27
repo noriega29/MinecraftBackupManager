@@ -482,6 +482,106 @@ namespace MinecraftBackupManager.Tests.Backup
         }
 
         // ============================================================
+        // HORARIO DE VERANO
+        // ============================================================
+
+        [TestMethod]
+        public async Task Scheduler_WhenTheClockSpringsForward_ShouldStillBackUpAtTheNextRealHour()
+        {
+            // 06:20 UTC son las 01:20 locales. A las 02:00 locales (07:00 UTC) el reloj salta a las 03:00.
+            await using var context = new BackupSchedulerTestContext(
+                utcNow: "2026-11-29T06:20:00Z",
+                localTimeZone: CreateDaylightSavingZone());
+
+            await context.StartAndWaitUntilArmedAsync();
+
+            // 40 minutos reales después son las 03:00 locales: no debe verse como un ciclo tardío.
+            await context.AdvanceAsync(TimeSpan.FromMinutes(40));
+
+            Assert.HasCount(1, context.Reports);
+            Assert.DoesNotContain("retraso", context.ReadBackupLog());
+
+            // La hora siguiente (04:00 locales) también funciona.
+            await context.AdvanceAsync(TimeSpan.FromMinutes(60));
+
+            Assert.HasCount(2, context.Reports);
+        }
+
+        [TestMethod]
+        public async Task Scheduler_WhenTheClockFallsBack_ShouldBackUpOncePerRealHour()
+        {
+            // 05:10 UTC son las 01:10 locales (horario de verano). A las 02:00 de verano (06:00 UTC)
+            // el reloj vuelve a la 01:00.
+            await using var context = new BackupSchedulerTestContext(
+                utcNow: "2026-12-06T05:10:00Z",
+                localTimeZone: CreateDaylightSavingZone());
+
+            await context.StartAndWaitUntilArmedAsync();
+
+            // 06:00 UTC: son otra vez las 01:00 locales.
+            await context.AdvanceAsync(TimeSpan.FromMinutes(50));
+
+            Assert.HasCount(1, context.Reports);
+
+            // 07:00 UTC: son las 02:00 locales. Con el cálculo anterior, este ciclo se perdía.
+            await context.AdvanceAsync(TimeSpan.FromMinutes(60));
+
+            Assert.HasCount(2, context.Reports);
+        }
+
+        // ============================================================
+        // CICLOS OMITIDOS POR UN RESPALDO LARGO
+        // ============================================================
+
+        [TestMethod]
+        public async Task Cycle_WhenABackupRunsPastTheNextSlots_ShouldLogTheSkippedOnes()
+        {
+            await using var context = new BackupSchedulerTestContext();
+
+            var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            context.Repository.BackupGate = gate.Task;
+
+            await context.StartAndWaitUntilArmedAsync();
+
+            // El ciclo de las 15:00 empieza y se queda esperando en el respaldo.
+            context.Clock.Advance(UntilFirstSlot);
+
+            await context.Repository.BackupStarted.Task.WaitAsync(TestTimeout);
+
+            // El respaldo "dura" dos horas y media: el reloj salta a las 17:30 sin ningún
+            // temporizador que disparar (los :00 de las 16:00 y las 17:00 pasan de largo).
+            context.Clock.Advance(TimeSpan.FromMinutes(150));
+
+            gate.SetResult();
+
+            await context.WaitForReportAsync();
+
+            // Espera a que el planificador programe su próximo ciclo (las 18:00).
+            await context.AdvanceAsync(TimeSpan.Zero);
+
+            string log = context.ReadBackupLog();
+
+            StringAssert.Contains(log, "El respaldo de las 15:00 duró más de una hora");
+            StringAssert.Contains(log, "se omitieron 2 ciclo(s)");
+        }
+
+        [TestMethod]
+        public async Task Cycle_WhenBackupsFinishWithinTheHour_ShouldNotLogSkippedSlots()
+        {
+            await using var context = new BackupSchedulerTestContext();
+
+            await context.StartAndWaitUntilArmedAsync();
+
+            // 15:00 y 16:00.
+            await context.AdvanceAsync(UntilFirstSlot);
+            await context.AdvanceAsync(TimeSpan.FromMinutes(60));
+
+            Assert.HasCount(2, context.Reports);
+            Assert.DoesNotContain("se omitieron", context.ReadBackupLog());
+        }
+
+        // ============================================================
         // VALIDACIÓN DEL CONSTRUCTOR
         // ============================================================
 
@@ -543,6 +643,32 @@ namespace MinecraftBackupManager.Tests.Backup
         // ============================================================
         // AYUDANTES
         // ============================================================
+
+        // Zona de prueba UTC-5 con un horario de verano de una semana en 2026: el 29 de noviembre a
+        // las 02:00 el reloj salta a las 03:00, y el 6 de diciembre a las 02:00 vuelve a la 01:00.
+        private static TimeZoneInfo CreateDaylightSavingZone()
+        {
+            TimeZoneInfo.TransitionTime start = TimeZoneInfo.TransitionTime.CreateFixedDateRule(
+                new DateTime(1, 1, 1, 2, 0, 0), month: 11, day: 29);
+
+            TimeZoneInfo.TransitionTime end = TimeZoneInfo.TransitionTime.CreateFixedDateRule(
+                new DateTime(1, 1, 1, 2, 0, 0), month: 12, day: 6);
+
+            TimeZoneInfo.AdjustmentRule rule = TimeZoneInfo.AdjustmentRule.CreateAdjustmentRule(
+                new DateTime(2026, 1, 1),
+                new DateTime(2026, 12, 31),
+                TimeSpan.FromHours(1),
+                start,
+                end);
+
+            return TimeZoneInfo.CreateCustomTimeZone(
+                "Test DST zone",
+                TimeSpan.FromHours(-5),
+                "Test DST zone",
+                "Test standard time",
+                "Test daylight time",
+                new[] { rule });
+        }
 
         private static int CountOccurrences(string text, string value)
         {

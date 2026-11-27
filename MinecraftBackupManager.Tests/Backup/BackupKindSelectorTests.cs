@@ -241,11 +241,12 @@ namespace MinecraftBackupManager.Tests.Backup
         }
 
         [TestMethod]
-        public void Constructor_WithoutTimeProvider_ShouldUseTheSystemClock()
+        public void Constructor_WithoutTimeProvider_ShouldNotThrow()
         {
             var selector = new BackupKindSelector();
 
-            // Con la lista vacía la respuesta es la misma sea cual sea el día.
+            // Con la lista vacía la respuesta es la misma sea cual sea el día: solo se
+            // comprueba que el constructor sin reloj funciona.
             Assert.AreEqual(ResticBackupKind.Weekly, selector.Select(Array.Empty<ResticSnapshot>()));
         }
 
