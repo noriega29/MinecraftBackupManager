@@ -42,6 +42,12 @@ namespace MinecraftBackupManager.Backup
             _logManager = logManager ?? throw new ArgumentNullException(nameof(logManager));
         }
 
+        /// <summary>
+        /// Indica si hay un respaldo en curso, incluida su retención (forget y prune).
+        /// Refleja el momento de la consulta: puede cambiar justo después.
+        /// </summary>
+        public bool IsRunning => _backupLock.CurrentCount == 0;
+
         public async Task<BackupReport> RunBackupAsync(ResticBackupKind kind, CancellationToken cancellationToken = default)
         {
             if (!Enum.IsDefined(kind))

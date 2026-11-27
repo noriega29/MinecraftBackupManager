@@ -191,6 +191,74 @@ namespace MinecraftBackupManager.Tests.Backup
         }
 
         // ============================================================
+        // ESTADO: IsRunning
+        // ============================================================
+
+        [TestMethod]
+        public void IsRunning_BeforeAnyBackup_ShouldBeFalse()
+        {
+            using var context = new BackupManagerTestContext();
+
+            Assert.IsFalse(context.Manager.IsRunning);
+        }
+
+        [TestMethod]
+        public async Task IsRunning_DuringBackup_ShouldBeTrueUntilItFinishes()
+        {
+            using var context = new BackupManagerTestContext();
+
+            var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            context.Repository.BackupGate = gate.Task;
+
+            Task<BackupReport> task = context.Manager.RunBackupAsync(ResticBackupKind.Manual);
+
+            await context.Repository.BackupStarted.Task.WaitAsync(TestTimeout);
+
+            Assert.IsTrue(context.Manager.IsRunning);
+
+            gate.SetResult();
+
+            await task.WaitAsync(TestTimeout);
+
+            Assert.IsFalse(context.Manager.IsRunning);
+        }
+
+        [TestMethod]
+        public async Task IsRunning_DuringRetention_ShouldStillBeTrue()
+        {
+            using var context = new BackupManagerTestContext();
+
+            var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            context.Repository.ForgetGate = gate.Task;
+
+            Task<BackupReport> task = context.Manager.RunBackupAsync(ResticBackupKind.Hourly);
+
+            await context.Repository.ForgetStarted.Task.WaitAsync(TestTimeout);
+
+            Assert.IsTrue(context.Manager.IsRunning);
+
+            gate.SetResult();
+
+            await task.WaitAsync(TestTimeout);
+
+            Assert.IsFalse(context.Manager.IsRunning);
+        }
+
+        [TestMethod]
+        public async Task IsRunning_AfterFailedBackup_ShouldBeFalse()
+        {
+            using var context = new BackupManagerTestContext();
+
+            context.Repository.BackupException = new InvalidOperationException("restic falló");
+
+            await context.Manager.RunBackupAsync(ResticBackupKind.Manual).WaitAsync(TestTimeout);
+
+            Assert.IsFalse(context.Manager.IsRunning);
+        }
+
+        // ============================================================
         // CANCELACIÓN
         // ============================================================
 
