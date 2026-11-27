@@ -59,8 +59,8 @@ namespace MinecraftBackupManager.Minecraft
         }
 
         /// <summary>
-        /// Conecta y autentica con el servidor RCON. Es idempotente: si ya hay
-        /// una sesión válida, no hace nada.
+        /// Abre una sesión RCON nueva y la autentica. Si había una sesión
+        /// anterior, la descarta primero.
         /// </summary>
         public async Task ConnectAsync(CancellationToken cancellationToken = default)
         {
@@ -69,6 +69,11 @@ namespace MinecraftBackupManager.Minecraft
             try
             {
                 ObjectDisposedException.ThrowIf(_disposed, this);
+
+                // Temporal: se abre siempre una sesión nueva, porque la anterior
+                // puede haberse cortado sin que el cliente lo sepa.
+                // Más adelante se desconectará al terminar cada respaldo.
+                DiscardClient();
 
                 await EnsureConnectedAsync(cancellationToken);
             }

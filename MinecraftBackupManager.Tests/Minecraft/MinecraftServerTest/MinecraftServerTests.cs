@@ -137,5 +137,41 @@ namespace MinecraftBackupManager.Tests.Minecraft.MinecraftServerTest
             // Es exactamente lo que BackupManager usa para decidir que el servidor está apagado.
             Assert.AreEqual(SocketError.ConnectionRefused, exception.SocketErrorCode);
         }
+
+        [TestMethod]
+        public async Task ConnectAsync_AfterServerClosedTheSession_ShouldOpenANewOne()
+        {
+            await using var context = new ServerTestContext();
+
+            await context.Server.ConnectAsync().WaitAsync(TestTimeout);
+
+            // Imita un reinicio: el servidor corta la sesión sin que el cliente lo sepa.
+            context.FakeServer.CloseAllConnections();
+
+            await context.Server.ConnectAsync().WaitAsync(TestTimeout);
+            await context.Server.PrepareForBackupAsync().WaitAsync(TestTimeout);
+
+            CollectionAssert.AreEqual(
+                new[] { "save-off", "save-all flush" },
+                context.FakeServer.ReceivedCommands.ToArray());
+
+            Assert.AreEqual(2, context.FakeServer.ConnectionCount);
+        }
+
+        [TestMethod]
+        public async Task ConnectAsync_AfterServerWasShutDown_ShouldThrowSocketExceptionWithConnectionRefused()
+        {
+            await using var context = new ServerTestContext();
+
+            await context.Server.ConnectAsync().WaitAsync(TestTimeout);
+
+            // El servidor se apaga después de haber tenido una sesión abierta.
+            await context.FakeServer.DisposeAsync();
+
+            SocketException exception = await TestAssert.ThrowsAsync<SocketException>(
+                () => context.Server.ConnectAsync().WaitAsync(TestTimeout));
+
+            Assert.AreEqual(SocketError.ConnectionRefused, exception.SocketErrorCode);
+        }
     }
 }

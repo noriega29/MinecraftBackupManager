@@ -11,7 +11,7 @@ namespace MinecraftBackupManager.Backup
     /// Guarda en prune-state.json cuándo fue el último prune exitoso y cuántos
     /// intentos fallidos hubo hoy, para que sobrevivan a reinicios.
     /// </summary>
-    public sealed class PruneStateStore
+    public sealed class PruneStateStore : IPruneStateStore
     {
         public const int DefaultPruneRetriesPerDay = 0;
 
@@ -195,7 +195,7 @@ namespace MinecraftBackupManager.Backup
         }
 
         // Un fallo del registro nunca debe interrumpir una operación.
-        public void TryLog(Action<LogManager> write)
+        private void TryLog(Action<LogManager> write)
         {
             try
             {
