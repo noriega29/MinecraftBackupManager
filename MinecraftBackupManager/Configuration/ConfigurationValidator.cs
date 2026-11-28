@@ -19,6 +19,47 @@ namespace MinecraftBackupManager.Configuration
             return new ConfigurationValidationResult(errors);
         }
 
+        /// <summary>
+        /// Revisa un solo dato, incluidos los conflictos en los que participa.
+        /// Los problemas de otros datos no se informan.
+        /// </summary>
+        public ConfigurationValidationResult ValidateField(ApplicationConfig config, ConfigurationField field)
+        {
+            ArgumentNullException.ThrowIfNull(config);
+
+            List<string> errors = new();
+
+            switch (field)
+            {
+                case ConfigurationField.ServerDirectory:
+                    ValidateServerDirectory(config.MinecraftServer?.ServerDirectory, errors);
+                    ValidateRepositoryLocation(config, errors);
+                    break;
+
+                case ConfigurationField.RconHost:
+                    ValidateRconHost(config.MinecraftServer?.RconHost, errors);
+                    break;
+
+                case ConfigurationField.RconPort:
+                    ValidateRconPort(config.MinecraftServer?.RconPort ?? 0, errors);
+                    break;
+
+                case ConfigurationField.RepositoryPath:
+                    ValidateRepositoryPath(config.Restic?.RepositoryPath, errors);
+                    ValidateRepositoryLocation(config, errors);
+                    break;
+
+                case ConfigurationField.HourlyCount:
+                    ValidateHourlyCount(config.Retention?.HourlyCount ?? 0, errors);
+                    break;
+
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(field), field, "El dato de configuración no es válido.");
+            }
+
+            return new ConfigurationValidationResult(errors);
+        }
+
         private static void ValidateMinecraftServer(ApplicationConfig config, List<string> errors)
         {
             MinecraftServerConfig? server = config.MinecraftServer;
@@ -28,33 +69,43 @@ namespace MinecraftBackupManager.Configuration
                 errors.Add("No se ha definido la configuración del servidor Minecraft.");
                 return;
             }
-            
-            if (string.IsNullOrWhiteSpace(server.ServerDirectory))
+
+            ValidateServerDirectory(server.ServerDirectory, errors);
+            ValidateRconHost(server.RconHost, errors);
+            ValidateRconPort(server.RconPort, errors);
+        }
+
+        private static void ValidateServerDirectory(string? serverDirectory, List<string> errors)
+        {
+            if (string.IsNullOrWhiteSpace(serverDirectory))
             {
                 errors.Add("La ruta del servidor Minecraft es obligatoria.");
             }
-            else
+            else if (!Path.IsPathFullyQualified(serverDirectory))
             {
-                if (!Path.IsPathFullyQualified(server.ServerDirectory))
-                {
-                    errors.Add("La ruta del servidor Minecraft debe ser una ruta completa.");
-                }
-                else if (!Directory.Exists(server.ServerDirectory))
-                {
-                    errors.Add("La ruta del servidor Minecraft no existe.");
-                }
+                errors.Add("La ruta del servidor Minecraft debe ser una ruta completa.");
             }
+            else if (!Directory.Exists(serverDirectory))
+            {
+                errors.Add("La ruta del servidor Minecraft no existe.");
+            }
+        }
 
-            if (string.IsNullOrWhiteSpace(server.RconHost))
+        private static void ValidateRconHost(string? host, List<string> errors)
+        {
+            if (string.IsNullOrWhiteSpace(host))
             {
                 errors.Add("La dirección del host RCON es obligatoria.");
             }
-            else if (!IsValidHost(server.RconHost))
+            else if (!IsValidHost(host))
             {
                 errors.Add("La dirección del host RCON no tiene un formato válido.");
             }
+        }
 
-            if (server.RconPort < 1 || server.RconPort > 65535)
+        private static void ValidateRconPort(int port, List<string> errors)
+        {
+            if (port < 1 || port > 65535)
             {
                 errors.Add("El puerto RCON debe estar entre 1 y 65535.");
             }
@@ -90,11 +141,16 @@ namespace MinecraftBackupManager.Configuration
                 }
             }
 
-            if (string.IsNullOrWhiteSpace(restic.RepositoryPath))
+            ValidateRepositoryPath(restic.RepositoryPath, errors);
+        }
+
+        private static void ValidateRepositoryPath(string? repositoryPath, List<string> errors)
+        {
+            if (string.IsNullOrWhiteSpace(repositoryPath))
             {
                 errors.Add("La ruta del repositorio Restic es obligatoria.");
             }
-            else if (!Path.IsPathFullyQualified(restic.RepositoryPath))
+            else if (!Path.IsPathFullyQualified(repositoryPath))
             {
                 errors.Add("La ruta del repositorio Restic debe ser una ruta completa.");
             }
@@ -134,9 +190,14 @@ namespace MinecraftBackupManager.Configuration
                 return;
             }
 
-            ValidateCount(retention.HourlyCount, RetentionConfig.MaximumHourlyCount, "por hora (hourly)", errors);
+            ValidateHourlyCount(retention.HourlyCount, errors);
             ValidateCount(retention.DailyCount, RetentionConfig.MaximumDailyCount, "diarias (daily)", errors);
             ValidateCount(retention.WeeklyCount, RetentionConfig.MaximumWeeklyCount, "semanales (weekly)", errors);
+        }
+
+        private static void ValidateHourlyCount(int value, List<string> errors)
+        {
+            ValidateCount(value, RetentionConfig.MaximumHourlyCount, "por hora (hourly)", errors);
         }
 
         private static void ValidateCount(int value, int maximum, string description, List<string> errors)

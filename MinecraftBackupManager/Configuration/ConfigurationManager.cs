@@ -1,4 +1,5 @@
-﻿using System.Text.Json;
+﻿using System.Globalization;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using MinecraftBackupManager.Configuration.Models;
 using MinecraftBackupManager.Infrastructure;
@@ -85,6 +86,21 @@ namespace MinecraftBackupManager.Configuration
                     File.Delete(temporaryFile);
                 }
             }
+        }
+
+        /// <summary>
+        /// Copia config.json antes de reemplazarlo y devuelve la ruta de la copia.
+        /// El original no se modifica.
+        /// </summary>
+        public string CopyDamagedFile(DateTimeOffset now)
+        {
+            string timestamp = now.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture);
+            string copyPath = $"{_paths.ConfigurationFile}.damaged-{timestamp}";
+
+            // overwrite: false para no perder nunca una copia anterior.
+            File.Copy(_paths.ConfigurationFile, copyPath, overwrite: false);
+
+            return copyPath;
         }
     }
 }
